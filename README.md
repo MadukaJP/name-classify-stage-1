@@ -1,26 +1,32 @@
 # Name Classify API
 
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-View%20API-blue?logo=fastapi)](https://name-classify-api.fastapicloud.dev)
+[![Live API](https://img.shields.io/badge/Live%20API-Online-blue?logo=fastapi)](https://name-classify-api.fastapicloud.dev/)
+[![Docs](https://img.shields.io/badge/Swagger-Docs-green)](https://name-classify-api.fastapicloud.dev/docs)
 
-A FastAPI backend service that classifies a person's likely profile from a name using external public APIs, then stores and serves the result from a PostgreSQL database.
+`Name Classify API` is a FastAPI service that accepts a person's name, calls three public prediction APIs, applies classification logic, stores the result in PostgreSQL, and exposes endpoints to retrieve, filter, and delete saved profiles.
 
----
+## Live Links
 
-** [Live Demo](https://name-classify-api.fastapicloud.dev)**
-
----
+- Base URL: [https://name-classify-api.fastapicloud.dev/](https://name-classify-api.fastapicloud.dev/)
+- Swagger Docs: [https://name-classify-api.fastapicloud.dev/docs](https://name-classify-api.fastapicloud.dev/docs)
+- ReDoc: [https://name-classify-api.fastapicloud.dev/redoc](https://name-classify-api.fastapicloud.dev/redoc)
 
 ## Features
 
-- Create a profile from a name using:
-  - [Genderize](https://api.genderize.io)
-  - [Agify](https://api.agify.io)
-  - [Nationalize](https://api.nationalize.io)
-- Save enriched profile data in PostgreSQL
-- Fetch one profile by ID
-- Fetch all profiles with filters
-- Delete profile by ID
-- Standardized JSON response format
+- Creates a classified profile from a submitted name
+- Calls `Genderize`, `Agify`, and `Nationalize` concurrently
+- Stores data persistently in PostgreSQL
+- Prevents duplicate records for the same name
+- Supports profile lookup by ID
+- Supports filtering by `gender`, `country_id`, and `age_group`
+- Uses UUID v7 IDs and UTC ISO 8601 timestamps
+- Returns a consistent JSON response structure
+
+## External APIs Used
+
+- [Genderize](https://api.genderize.io)
+- [Agify](https://api.agify.io)
+- [Nationalize](https://api.nationalize.io)
 
 ## Tech Stack
 
@@ -30,6 +36,7 @@ A FastAPI backend service that classifies a person's likely profile from a name 
 - PostgreSQL
 - Pydantic
 - HTTPX
+- Uvicorn
 
 ## Project Structure
 
@@ -37,6 +44,7 @@ A FastAPI backend service that classifies a person's likely profile from a name 
 .
 |-- app.py
 |-- database.py
+|-- requirements.txt
 |-- models/
 |   |-- base.py
 |   `-- profile.py
@@ -48,185 +56,236 @@ A FastAPI backend service that classifies a person's likely profile from a name 
 |   |-- profile_create.py
 |   |-- profile_out.py
 |   `-- profiles_out.py
-|-- utils/
-|   |-- custom_content.py
-|   |-- generate_id.py
-|   `-- get_age_group.py
-`-- requirements.txt
+`-- utils/
+    |-- custom_content.py
+    |-- generate_id.py
+    `-- get_age_group.py
 ```
 
 ## How It Works
 
-1. `POST /api/profiles` receives a name.
-2. The API validates the name format.
-3. If the name already exists in the database (case-insensitive), the existing record is returned.
-4. If not, the service concurrently calls Genderize, Agify, and Nationalize.
-5. It computes:
-   - `age_group` from age (`child`, `teenager`, `adult`, `senior`)
-   - most likely country from Nationalize probabilities
-6. The profile is stored and returned in a normalized response.
+1. A client sends a name to `POST /api/profiles`.
+2. The API trims and validates the name.
+3. It checks the database for an existing record using a case-insensitive name lookup.
+4. If no record exists, it fetches data from the three external APIs in parallel.
+5. It derives:
+   - `age_group` from the returned age
+   - `country_id` from the highest-probability country in Nationalize
+6. The API stores the profile and returns it.
+7. If the profile already exists, the existing record is returned instead of creating a duplicate.
 
-## Prerequisites
+## Classification Rules
 
-- Python 3.10+
-- PostgreSQL database
+- `0-12` -> `child`
+- `13-19` -> `teenager`
+- `20-59` -> `adult`
+- `60+` -> `senior`
+
+For nationality, the API selects the country with the highest probability from the Nationalize response.
+
+## Getting Started
+
+### Prerequisites
+
+- Python 3.10 or higher
+- PostgreSQL
 - `pip`
 
-## Setup
+### Installation
 
 1. Clone the repository:
 
-   ```bash
-   git clone <your-repo-url>
-   cd name-classify-stage-1
-   ```
+```bash
+git clone <your-repo-url>
+cd name-classify-stage-1
+```
 
-2. Create and activate a virtual environment:
+2. Create a virtual environment:
 
-   ```bash
-   python -m venv venv
-   ```
+```bash
+python -m venv venv
+```
 
-   Windows (PowerShell):
+3. Activate it:
 
-   ```powershell
-   .\venv\Scripts\Activate.ps1
-   ```
+Windows PowerShell:
 
-   macOS/Linux:
+```powershell
+.\venv\Scripts\Activate.ps1
+```
 
-   ```bash
-   source venv/bin/activate
-   ```
+macOS/Linux:
 
-3. Install dependencies:
+```bash
+source venv/bin/activate
+```
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+4. Install dependencies:
 
-4. Create an environment file:
+```bash
+pip install -r requirements.txt
+```
 
-   Create a `.env` file in the project root with:
+### Environment Variables
 
-   ```env
-   ENV=development
-   LOCAL_DATABASE_URL=postgresql+psycopg2://<user>:<password>@<host>:<port>/<database>
-   PROD_DATABASE_URL=postgresql+psycopg2://<user>:<password>@<host>:<port>/<database>
-   ```
+Create a `.env` file in the project root:
 
-   Notes:
-   - If `ENV=development`, `LOCAL_DATABASE_URL` is used.
-   - Any other `ENV` value uses `PROD_DATABASE_URL`.
+```env
+ENV=development
+LOCAL_DATABASE_URL=postgresql+psycopg2://<user>:<password>@<host>:<port>/<database>
+PROD_DATABASE_URL=postgresql+psycopg2://<user>:<password>@<host>:<port>/<database>
+```
 
-5. Run the API:
+Behavior:
 
-   ```bash
-   uvicorn app:app --reload
-   ```
+- `ENV=development` uses `LOCAL_DATABASE_URL`
+- any other value uses `PROD_DATABASE_URL`
 
-6. Open docs:
-   - Swagger UI: `http://127.0.0.1:8000/docs`
-   - ReDoc: `http://127.0.0.1:8000/redoc`
+### Run Locally
+
+```bash
+uvicorn app:app --reload
+```
+
+Local docs:
+
+- `http://127.0.0.1:8000/docs`
+- `http://127.0.0.1:8000/redoc`
 
 ## API Endpoints
 
-### Health/Welcome
+### `GET /`
 
-- `GET /`
-  - Response:
-    ```json
-    { "message": "Welcome to Name Classify API" }
-    ```
+Returns a simple welcome response.
 
-### Create Profile
+```json
+{
+  "message": "Welcome to Name Classify API"
+}
+```
 
-- `POST /api/profiles`
-- Request body:
+### `POST /api/profiles`
 
-  ```json
-  {
-    "name": "Bolaji"
-  }
-  ```
+Creates a new profile from a submitted name.
 
-- Success response:
-  - Status: `200 OK`
-  - Body shape:
+Request body:
 
-  ```json
-  {
-    "status": "success",
-    "data": {
-      "id": "019...",
-      "name": "Bolaji",
-      "gender": "male",
-      "gender_probability": 0.98,
-      "sample_size": 1234,
-      "age": 27,
-      "age_group": "adult",
-      "country_id": "NG",
-      "country_probability": 0.65,
-      "created_at": "2026-04-16T10:30:00Z"
-    }
-  }
-  ```
+```json
+{
+  "name": "ella"
+}
+```
 
-- Common error statuses:
-  - `400` for missing/empty name
-  - `422` for invalid name format
-  - `502` for upstream API failure/invalid external data
+New profile response:
 
-### Get Profile by ID
-
-- `GET /api/profiles/{id}`
-- Success response:
-  - Status: `200 OK`
-  - Includes full profile in `data`
-- Error response:
-  - `404` if profile is not found
-
-### Get All Profiles (with filters)
-
-- `GET /api/profiles`
-- Optional query params:
-  - `gender` (string)
-  - `country_id` (string)
-  - `age_group` (`child` | `teenager` | `adult` | `senior`)
-- Success response:
-  - Status: `200 OK`
-  - Returns:
-    - `count`: number of records returned
-    - `data`: list of simplified profile objects
-
-### Delete Profile
-
-- `DELETE /api/profiles/{id}`
-- Success response:
-  - Status: `204 No Content`
-- Error response:
-  - `404` if profile is not found
-
-## Response Format
-
-The API uses a unified response envelope:
+- Status: `201 Created`
 
 ```json
 {
   "status": "success",
-  "message": "optional",
-  "count": 0,
+  "data": {
+    "id": "019...",
+    "name": "ella",
+    "gender": "female",
+    "gender_probability": 0.99,
+    "sample_size": 1234,
+    "age": 46,
+    "age_group": "adult",
+    "country_id": "NG",
+    "country_probability": 0.85,
+    "created_at": "2026-04-01T12:00:00Z"
+  }
+}
+```
+
+Duplicate profile response:
+
+- Status: `200 OK`
+
+```json
+{
+  "status": "success",
+  "message": "Profile already exists",
+  "data": {
+    "id": "019...",
+    "name": "ella"
+  }
+}
+```
+
+### `GET /api/profiles/{id}`
+
+Returns a single saved profile by ID.
+
+- Status: `200 OK`
+
+### `GET /api/profiles`
+
+Returns all profiles, optionally filtered by query parameters.
+
+Supported query parameters:
+
+- `gender`
+- `country_id`
+- `age_group`
+
+Example:
+
+```text
+/api/profiles?gender=male&country_id=NG
+```
+
+- Status: `200 OK`
+
+### `DELETE /api/profiles/{id}`
+
+Deletes a saved profile.
+
+- Status: `204 No Content`
+
+## Response Format
+
+Successful responses follow this shape:
+
+```json
+{
+  "status": "success",
   "data": {}
 }
 ```
 
-- `message`, `count`, and `data` are included only when relevant.
+Additional fields such as `message` and `count` are included when needed.
+
+Error responses follow this shape:
+
+```json
+{
+  "status": "error",
+  "message": "Profile not found"
+}
+```
+
+## Error Handling
+
+Possible error responses include:
+
+- `400 Bad Request` -> missing or empty name
+- `422 Unprocessable Entity` -> invalid name format
+- `404 Not Found` -> profile not found
+- `502 Bad Gateway` -> external API returned invalid data
+- `500 Internal Server Error` -> unexpected server failure
+
+External API edge cases handled:
+
+- `Genderize` returns `gender: null` or `count: 0`
+- `Agify` returns `age: null`
+- `Nationalize` returns no country data
 
 ## Data Model
 
-Stored `Profile` fields:
+Each stored profile contains:
 
-- `id` (UUIDv7 string)
+- `id`
 - `name`
 - `gender`
 - `gender_probability`
@@ -235,15 +294,15 @@ Stored `Profile` fields:
 - `age_group`
 - `country_id`
 - `country_probability`
-- `created_at` (UTC timestamp)
+- `created_at`
 
 ## Notes
 
-- CORS currently allows all origins (`*`).
-- Tables are created at startup via `Base.metadata.create_all(engine)`.
-- A global exception handler returns:
-  - `500` with message: `"Upstream or server failure"`
+- IDs are generated as UUID v7 values
+- Timestamps are returned in UTC ISO 8601 format
+- CORS is enabled for all origins
+- Tables are created automatically on application startup
 
 ## Author
 
-Built by MadukaJP.
+Built by `MadukaJP`.

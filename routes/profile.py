@@ -50,7 +50,7 @@ async def create_profile(request: Request, profile: ProfileCreate, db: Session =
     if profile_db:
         profile_response = ProfileOut.model_validate(profile_db).model_dump()
         return JSONResponse(
-            status_code=201,
+            status_code=200,
             content=custom_content(
                 "success", message="Profile already exists", data=profile_response
             ),
@@ -138,7 +138,7 @@ async def create_profile(request: Request, profile: ProfileCreate, db: Session =
     profile_response = ProfileOut.model_validate(profile_db).model_dump()
 
     return JSONResponse(
-        status_code=200, content=custom_content("success", data=profile_response)
+        status_code=201, content=custom_content("success", data=profile_response)
     )
 
 

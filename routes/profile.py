@@ -50,7 +50,7 @@ async def create_profile(request: Request, profile: ProfileCreate, db: Session =
     if profile_db:
         profile_response = ProfileOut.model_validate(profile_db).model_dump()
         return JSONResponse(
-            status_code=200,
+            status_code=201,
             content=custom_content(
                 "success", message="Profile already exists", data=profile_response
             ),
@@ -58,7 +58,18 @@ async def create_profile(request: Request, profile: ProfileCreate, db: Session =
 
 
     # fetch data
-    data = await all_external_data(request, name)
+    external_result = await all_external_data(request, name)
+
+    if external_result.get("error"):
+        return JSONResponse(
+            status_code=502,
+            content=custom_content(
+                "error",
+                message=external_result.get("message", "Upstream or server failure"),
+            ),
+        )
+
+    data = external_result["data"]
 
     # get data categories
     genderize = data["genderize"]

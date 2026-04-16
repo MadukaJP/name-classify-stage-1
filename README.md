@@ -1,6 +1,14 @@
 # Name Classify API
 
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-View%20API-blue?logo=fastapi)](https://name-classify-api.fastapicloud.dev)
+
 A FastAPI backend service that classifies a person's likely profile from a name using external public APIs, then stores and serves the result from a PostgreSQL database.
+
+---
+
+** [Live Demo](https://name-classify-api.fastapicloud.dev)**
+
+---
 
 ## Features
 

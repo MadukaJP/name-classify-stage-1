@@ -26,6 +26,49 @@ AGE_RANGE_PHRASES = (
 
 NAME_INTRO_RE = re.compile(r"\b(?:named|called|name is|names)\s+(.+)$", re.IGNORECASE)
 NAME_SPLIT_RE = re.compile(r"\s*(?:and|&|,|/|\+)\s*", re.IGNORECASE)
+NAME_TOKEN_RE = re.compile(r"^[a-z]+(?:[-'][a-z]+)?$", re.IGNORECASE)
+EXPLICIT_NAME_MARKERS = ("named", "called", "name is", "names")
+BARE_NAME_DENYLIST = {
+    "all",
+    "any",
+    "data",
+    "find",
+    "get",
+    "give",
+    "hello",
+    "list",
+    "look",
+    "people",
+    "person",
+    "profile",
+    "profiles",
+    "result",
+    "results",
+    "search",
+    "show",
+    "user",
+    "users",
+}
+BARE_NAME_CONTEXT_WORDS = {
+    "above",
+    "between",
+    "find",
+    "from",
+    "get",
+    "give",
+    "in",
+    "list",
+    "older",
+    "over",
+    "profile",
+    "profiles",
+    "search",
+    "show",
+    "under",
+    "with",
+    "without",
+    "younger",
+}
 STOPWORDS = {
     "and",
     "from",
@@ -83,6 +126,15 @@ COUNTRY_ALIASES = {
     "uk": "GB",
 }
 
+COUNTRY_NAME_LOOKUP = {
+    c.name.lower(): c.alpha_2 for c in pycountry.countries
+}
+for c in pycountry.countries:
+    if hasattr(c, "official_name"):
+        COUNTRY_NAME_LOOKUP[c.official_name.lower()] = c.alpha_2
+
+COUNTRY_ALPHA_2_LOOKUP = {c.alpha_2.upper() for c in pycountry.countries}
+
 
 def _dedupe_preserve_order(values):
     seen = set()
@@ -98,6 +150,66 @@ def _dedupe_preserve_order(values):
 def _contains_phrase(text: str, phrase: str) -> bool:
     pattern = r"\b" + re.escape(phrase).replace(r"\ ", r"[-\s]+") + r"\b"
     return re.search(pattern, text, re.IGNORECASE) is not None
+
+
+def _is_country_term(value: str) -> bool:
+    if not value:
+        return False
+
+    normalized = value.strip().lower()
+    if normalized in COUNTRY_ALIASES:
+        return True
+
+    if normalized in COUNTRY_NAME_LOOKUP:
+        return True
+
+    if normalized.upper() in COUNTRY_ALPHA_2_LOOKUP:
+        return True
+
+    return False
+
+
+def _normalize_name_chunk(chunk: str):
+    tokens = re.findall(r"[a-z]+(?:[-'][a-z]+)?", chunk.lower())
+    if not tokens or len(tokens) > 3:
+        return None
+
+    if any(token in STOPWORDS for token in tokens):
+        return None
+
+    candidate = " ".join(tokens)
+    if _is_country_term(candidate):
+        return None
+
+    if not all(NAME_TOKEN_RE.fullmatch(token) for token in tokens):
+        return None
+
+    return " ".join(token.capitalize() for token in tokens)
+
+
+def _is_bare_name_like_query(text: str) -> bool:
+    normalized = text.strip()
+    if not normalized:
+        return False
+
+    if re.search(r"[\n\r.!?;:]", normalized):
+        return False
+
+    lowered = normalized.lower()
+    if any(marker in lowered for marker in EXPLICIT_NAME_MARKERS):
+        return False
+
+    tokens = re.findall(r"[a-z]+(?:[-'][a-z]+)?", lowered)
+    if not tokens:
+        return False
+
+    if any(token in BARE_NAME_DENYLIST for token in tokens):
+        return False
+
+    if any(token in BARE_NAME_CONTEXT_WORDS for token in tokens):
+        return False
+
+    return True
 
 
 def detect_gender_terms(text):
@@ -196,7 +308,43 @@ def detect_names(text):
             if cleaned and re.fullmatch(r"[A-Z][A-Za-z'\-]*(?:\s+[A-Z][A-Za-z'\-]*)*", cleaned):
                 names.append(cleaned)
 
-    return _dedupe_preserve_order(names) if names else None
+    if names:
+        return _dedupe_preserve_order(names)
+
+    if not _is_bare_name_like_query(text):
+        return None
+
+    raw_chunks = [chunk.strip(" ,.") for chunk in NAME_SPLIT_RE.split(text) if chunk.strip(" ,.")]
+
+    if len(raw_chunks) > 1:
+        if len(raw_chunks) > 3:
+            return None
+
+        bare_names = []
+        for chunk in raw_chunks:
+            if len(re.findall(r"[a-z]+(?:[-'][a-z]+)?", chunk.lower())) != 1:
+                return None
+
+            normalized_name = _normalize_name_chunk(chunk)
+            if not normalized_name:
+                return None
+
+            bare_names.append(normalized_name)
+
+        return _dedupe_preserve_order(bare_names) if bare_names else None
+
+    tokens = re.findall(r"[a-z]+(?:[-'][a-z]+)?", text.lower())
+    if len(tokens) != 1:
+        return None
+
+    token = tokens[0]
+    if len(token) < 2 or token in STOPWORDS or token in BARE_NAME_DENYLIST:
+        return None
+
+    if _is_country_term(token):
+        return None
+
+    return [token.capitalize()]
 
 
 def detect_profile_filters(text):

@@ -93,7 +93,9 @@ Rules:
   - `under X`, `younger than X`, `less than X`, `below X`, `up to X` -> `max_age=X`
   - a standalone number like `30` -> `age=30`
 - Country keywords are matched through `pycountry` plus aliases such as `usa`, `u.s.`, `united states`, `united states of america`, and `uk`.
-- Name detection only works when the query includes patterns like `named`, `called`, `name is`, or `names`.
+- A standalone alphabetic name query like `john` or `johnson` is treated as a name search when it does not collide with a country, gender, or age term.
+- Delimiter-separated name lists like `john and anna`, `john, anna`, or `john / anna` are also treated as name searches.
+- Name detection also works when the query includes patterns like `named`, `called`, `name is`, or `names`.
 - Queries that cannot be interpreted return `{ "status": "error", "message": "Unable to interpret query" }`.
 
 Examples:
@@ -124,7 +126,7 @@ Response format:
 - It does not infer relative or informal age wording beyond the patterns in the code, such as `in their twenties`, `late thirties`, or `around 40`.
 - Standalone numbers are treated as ages, so a number inside an unrelated sentence can be misread as an age filter.
 - Country matching is strongest for full country names and the documented aliases, and misspellings outside the fuzzy-match threshold may be missed.
-- Name extraction only recognizes explicit phrases like `named John` or `called Anna`, so arbitrary names inside a sentence are not always detected.
+- Name extraction works best for single-name queries, delimiter-separated lists, and explicit phrases like `named John` or `called Anna`; arbitrary names buried inside a longer sentence are not always detected.
 - When multiple supported filters appear together, the API combines them into a stricter search, which may return no results if the query is too specific.
 
 ## External APIs Used

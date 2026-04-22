@@ -20,18 +20,6 @@ async def lifespan(app: FastAPI):
 
 app = FastAPI(lifespan=lifespan)
 
-app.include_router(profile.router)
-
-# CORS
-origins = ['*']
-
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
 
 
 @app.exception_handler(Exception)
@@ -45,6 +33,17 @@ async def global_exception_handler(request: Request, exc: Exception):
         ),
     )
 
+app.include_router(profile.router)
 
+# CORS
+origins = ['*']
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=origins,
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 Base.metadata.create_all(engine)

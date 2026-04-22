@@ -1,22 +1,7 @@
-import os
-from dotenv import load_dotenv
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker
+from config import DATABASE_URL
 
-# Load environment variables
-load_dotenv()
-
-ENV = os.getenv("ENV", "development")
-
-# Pick database URL based on environment
-DATABASE_URL = (
-    os.getenv("LOCAL_DATABASE_URL")
-    if ENV == "development"
-    else os.getenv("PROD_DATABASE_URL")
-)
-
-if not DATABASE_URL:
-    raise ValueError("DATABASE_URL is not set in environment variables")
 
 engine = create_engine(DATABASE_URL, connect_args={"options": "-c timezone=utc"})
 

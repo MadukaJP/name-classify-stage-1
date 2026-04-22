@@ -1,12 +1,6 @@
-from pydantic import BaseModel, ConfigDict
+from pydantic_schemas.profile_out import ProfileOut
 
-class ProfilesOut(BaseModel):
-    id: str
-    name: str
-    gender: str
-    age: int
-    age_group: str
-    country_id: str
 
-    model_config = ConfigDict(from_attributes=True)
+class ProfilesOut(ProfileOut):
+    pass
 

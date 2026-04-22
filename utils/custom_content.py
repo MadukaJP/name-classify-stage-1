@@ -1,12 +1,14 @@
-from typing import Literal
+from typing import Literal, Optional
 
 def custom_content(
     status: Literal["error", "success"],
-    data: dict | None = None,
-    message: str | None = None,
-    count: int | None = None,
+    data: Optional[dict] = None,
+    message: Optional[str] = None,
+    count: Optional[int] = None,
+    page: Optional[int] = None,
+    limit: Optional[int] = None,
+    total: Optional[int] = None,
 ) -> dict:
-
     response = {"status": status}
 
     if message is not None:
@@ -14,6 +16,15 @@ def custom_content(
 
     if count is not None:
         response["count"] = count
+
+    if page is not None:
+        response["page"] = page
+
+    if limit is not None:
+        response["limit"] = limit
+
+    if total is not None:
+        response["total"] = total
 
     if data is not None:
         response["data"] = data

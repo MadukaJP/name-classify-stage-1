@@ -18,9 +18,114 @@
 - Stores data persistently in PostgreSQL
 - Prevents duplicate records for the same name
 - Supports profile lookup by ID
-- Supports filtering by `gender`, `country_id`, and `age_group`
+- Supports advanced filtering by `gender`, `age_group`, `country_id`, `min_age`, `max_age`, `min_gender_probability`, and `min_country_probability`
+- Supports sorting and pagination
+- Supports rule-based natural language search
 - Uses UUID v7 IDs and UTC ISO 8601 timestamps
 - Returns a consistent JSON response structure
+
+## Query Engine
+
+### `GET /api/profiles`
+
+Supported query parameters:
+
+- `gender`
+- `age_group`
+- `country_id`
+- `min_age`
+- `max_age`
+- `min_gender_probability`
+- `min_country_probability`
+- `sort_by=age|created_at|gender_probability`
+- `order=asc|desc`
+- `page` with default `1`
+- `limit` with default `10` and maximum `50`
+
+Example:
+
+```text
+/api/profiles?gender=male&country_id=NG&min_age=25&sort_by=age&order=desc&page=1&limit=10
+```
+
+Response format:
+
+```json
+{
+  "status": "success",
+  "page": 1,
+  "limit": 10,
+  "total": 2026,
+  "data": []
+}
+```
+
+### `GET /api/profiles/search`
+
+Converts plain-English queries into filters using rule-based parsing only.
+
+How the parser works:
+
+- The query is normalized to lowercase and tokenized with regex-based matching.
+- The parser extracts filter groups for `gender`, `age_group`, `age_range`, `country`, and `name`.
+- Filters from different groups are combined with `AND`.
+- Multiple names are combined with `OR`.
+- Duplicate matches are removed while preserving the original order.
+
+Rules:
+
+- Gender keywords map like this:
+  - `male`, `males`, `man`, `men`, `boy`, `boys` -> `gender=male`
+  - `female`, `females`, `woman`, `women`, `girl`, `girls` -> `gender=female`
+- Age group keywords map like this:
+  - `child`, `children`, `kid`, `kids`, `toddler`, `toddlers` -> `age_group=child`
+  - `teen`, `teens`, `teenager`, `teenagers`, `teenage`, `adolescent`, `adolescents` -> `age_group=teenager`
+  - `adult`, `adults` -> `age_group=adult`
+  - `senior`, `seniors`, `elder`, `elders`, `elderly` -> `age_group=senior`
+- Age phrases map like this:
+  - `young adult` -> `age 20-35`
+  - `young` -> `age 16-24`
+  - `middle-aged` -> `age 36-55`
+  - `old` -> `age 56-80`
+  - `elderly` -> `age 81-100`
+  - `between X and Y` -> `min_age=X`, `max_age=Y`
+  - `above X`, `older than X`, `over X`, `at least X`, `more than X` -> `min_age=X`
+  - `under X`, `younger than X`, `less than X`, `below X`, `up to X` -> `max_age=X`
+  - a standalone number like `30` -> `age=30`
+- Country keywords are matched through `pycountry` plus aliases such as `usa`, `u.s.`, `united states`, `united states of america`, and `uk`.
+- Name detection only works when the query includes patterns like `named`, `called`, `name is`, or `names`.
+- Queries that cannot be interpreted return `{ "status": "error", "message": "Unable to interpret query" }`.
+
+Examples:
+
+- `young males` -> `gender=male`, `min_age=16`, `max_age=24`
+- `females above 30` -> `gender=female`, `min_age=30`
+- `people from angola` -> `country_id=AO`
+- `adult males from kenya` -> `gender=male`, `age_group=adult`, `country_id=KE`
+- `male and female teenagers above 17` -> `gender=male|female`, `age_group=teenager`, `min_age=17`
+
+Response format:
+
+```json
+{
+  "status": "success",
+  "page": 1,
+  "limit": 10,
+  "total": 2026,
+  "data": []
+}
+```
+
+## Limitations
+
+- The parser is rule-based, so it does not understand free-form intent the way a full NLP model would.
+- It does not handle negation such as `not male`, `except adults`, or `without country`.
+- It does not support nested boolean logic like `male or female but not senior`.
+- It does not infer relative or informal age wording beyond the patterns in the code, such as `in their twenties`, `late thirties`, or `around 40`.
+- Standalone numbers are treated as ages, so a number inside an unrelated sentence can be misread as an age filter.
+- Country matching is strongest for full country names and the documented aliases, and misspellings outside the fuzzy-match threshold may be missed.
+- Name extraction only recognizes explicit phrases like `named John` or `called Anna`, so arbitrary names inside a sentence are not always detected.
+- When multiple supported filters appear together, the API combines them into a stricter search, which may return no results if the query is too specific.
 
 ## External APIs Used
 
@@ -52,6 +157,8 @@
 |   `-- profile.py
 |-- services/
 |   `-- external_apis.py
+|-- scripts/
+|   `-- seed_profiles.py
 |-- pydantic_schemas/
 |   |-- profile_create.py
 |   |-- profile_out.py
@@ -188,10 +295,10 @@ New profile response:
     "name": "ella",
     "gender": "female",
     "gender_probability": 0.99,
-    "sample_size": 1234,
     "age": 46,
     "age_group": "adult",
     "country_id": "NG",
+    "country_name": "Nigeria",
     "country_probability": 0.85,
     "created_at": "2026-04-01T12:00:00Z"
   }
@@ -226,8 +333,16 @@ Returns all profiles, optionally filtered by query parameters.
 Supported query parameters:
 
 - `gender`
-- `country_id`
 - `age_group`
+- `country_id`
+- `min_age`
+- `max_age`
+- `min_gender_probability`
+- `min_country_probability`
+- `sort_by`
+- `order`
+- `page`
+- `limit`
 
 Example:
 
@@ -236,6 +351,19 @@ Example:
 ```
 
 - Status: `200 OK`
+
+### `GET /api/profiles/search`
+
+Searches profiles using natural language.
+
+Example:
+
+```text
+/api/profiles/search?q=male and female teenagers above 17 from Nigeri and USA named John and Anna
+```
+
+- Status: `200 OK`
+- Supports `page` and `limit`
 
 ### `DELETE /api/profiles/{id}`
 
@@ -269,7 +397,8 @@ Error responses follow this shape:
 
 Possible error responses include:
 
-- `400 Bad Request` -> missing or empty name
+- `400 Bad Request` -> missing or empty parameter
+- `400 Bad Request` -> invalid query parameters
 - `422 Unprocessable Entity` -> invalid name format
 - `404 Not Found` -> profile not found
 - `502 Bad Gateway` -> external API returned invalid data
@@ -289,12 +418,20 @@ Each stored profile contains:
 - `name`
 - `gender`
 - `gender_probability`
-- `sample_size`
 - `age`
 - `age_group`
 - `country_id`
+- `country_name`
 - `country_probability`
 - `created_at`
+
+## Seeding
+
+- Seed data is loaded from `data/seed_profiles.json`
+- Run the seed script with `python scripts/seed_profiles.py`
+- The script adds the repository root to `sys.path` before importing `database`, `models`, and `utils`, so the imports work even though the file lives in `scripts/`
+- Re-running the seed script skips duplicate names case-insensitively
+- Seeded profiles use normalized names, country codes, and UTC timestamps
 
 ## Notes
 

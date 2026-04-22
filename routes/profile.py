@@ -60,7 +60,7 @@ async def create_profile(
     )
 
     if profile_db:
-        profile_response = ProfileOut.model_validate(profile_db).model_dump()
+        profile_response = ProfileOut.model_validate(profile_db).model_dump(mode="json")
         return JSONResponse(
             status_code=200,
             content=custom_content(
@@ -146,7 +146,7 @@ async def create_profile(
     db.commit()
     db.refresh(profile_db)
 
-    profile_response = ProfileOut.model_validate(profile_db).model_dump()
+    profile_response = ProfileOut.model_validate(profile_db).model_dump(mode="json")
 
     return JSONResponse(
         status_code=201, content=custom_content("success", data=profile_response)
@@ -276,7 +276,7 @@ def get_profile(id: str | None = None, db: Session = Depends(get_db)):
             ),
         )
 
-    profile_response = ProfileOut.model_validate(profile_db).model_dump()
+    profile_response = ProfileOut.model_validate(profile_db).model_dump(mode="json")
 
     return JSONResponse(
         status_code=200, content=custom_content("success", data=profile_response)

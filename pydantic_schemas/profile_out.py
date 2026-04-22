@@ -1,8 +1,9 @@
 from pydantic import BaseModel, ConfigDict, field_serializer
 from datetime import datetime, timezone
+from uuid import UUID
 
 class ProfileOut(BaseModel):
-    id: str
+    id: UUID
     name: str
     gender: str
     gender_probability: float
@@ -24,3 +25,7 @@ class ProfileOut(BaseModel):
             value = value.astimezone(timezone.utc)
 
         return value.replace(microsecond=0).isoformat().replace("+00:00", "Z")
+
+    @field_serializer("id")
+    def serialize_id(self, value: UUID) -> str:
+        return str(value)

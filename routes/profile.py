@@ -1,18 +1,23 @@
+import math
+import csv, io
 from fastapi import Query, Request, Response, APIRouter, Depends
 from fastapi.responses import JSONResponse
+from fastapi.responses import StreamingResponse
 from sqlalchemy import asc, desc, or_
 from core.nlp.profile_filter_detector import detect_profile_filters
+from dependencies.auth import get_current_user, require_admin
+from dependencies.database import get_db
+from dependencies.limiter import limiter
 from models.profile import Profile
+from models.user import User
 from pydantic_schemas.profile_create import ProfileCreate
 from pydantic_schemas.profile_out import ProfileOut
 from pydantic_schemas.profiles_out import ProfilesOut
-
 import re
 from sqlalchemy.sql import func
 from datetime import datetime, timezone
-from typing import Literal, Optional
+from typing import Optional
 from sqlalchemy.orm import Session
-from database import get_db
 from services.external_apis import all_external_data
 from utils.country_utils import get_country_name_from_id
 from utils.custom_content import custom_content
@@ -26,14 +31,12 @@ ALLOWED_GENDERS = {"male", "female"}
 ALLOWED_AGE_GROUPS = {"child", "teenager", "adult", "senior"}
 
 
-@router.get("/")
-def index():
-    return {"message": "Welcome to Name Classify API"}
 
-
-@router.post("/api/profiles")
+@router.post("/profiles")
+@limiter.limit("60/minute")
 async def create_profile(
-    request: Request, profile: ProfileCreate, db: Session = Depends(get_db)
+    request: Request, profile: ProfileCreate, db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin), 
 ):
 
     name = profile.name.strip()
@@ -152,14 +155,17 @@ async def create_profile(
         status_code=201, content=custom_content("success", data=profile_response)
     )
 
-@router.get("/api/profiles/search")
+@router.get("/profiles/search")
+@limiter.limit("60/minute")
 def search_profiles(
+    request: Request,
     q: Optional[str] = None,
     sort_by: Optional[str] = "created_at",
     order: Optional[str] = "desc",
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     sort_by = (sort_by or "created_at").lower().strip()
     order = (order or "desc").lower().strip()
@@ -241,50 +247,133 @@ def search_profiles(
     total = query.count()
     offset = (page - 1) * limit
     profiles = query.offset(offset).limit(limit).all()
+    total_pages = math.ceil(total / limit)
 
-    data = [ProfilesOut.model_validate(p).model_dump(mode="json") for p in profiles]
+    base = f"/api/profiles?page={{p}}&limit={limit}"
 
-    return JSONResponse(
-        status_code=200,
-        content=custom_content(
-            "success",
-            page=page,
-            limit=limit,
-            total=total,
-            data=data,
-        ),
-    )
+    return JSONResponse(status_code=200, content={
+        "status": "success",
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "total_pages": total_pages,
+        "links": {
+            "self": base.format(p=page),
+            "next": base.format(p=page+1) if page < total_pages else None,
+            "prev": base.format(p=page-1) if page > 1 else None,
+        },
+        "data": [ProfileOut.model_validate(p).model_dump(mode="json") for p in profiles],
+    })
 
 
+@router.get("/profiles/export")
+@limiter.limit("60/minute")
+def export_profiles(
+    request: Request,
+    format: Optional[str] = "csv",
+    gender: Optional[str] = None,
+    country_id: Optional[str] = None,
+    age_group: Optional[str] = None,
+    min_age: Optional[int] = None,
+    max_age: Optional[int] = None,
+    min_gender_probability: Optional[float] = None,
+    min_country_probability: Optional[float] = None,
+    # Sorting
+    sort_by: Optional[str] = "created_at",
+    order: Optional[str] = "desc",
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+):
 
-@router.get("/api/profiles/{id}")
-def get_profile(id: str | None = None, db: Session = Depends(get_db)):
-    if not id:
+    try:
+        if gender:
+            gender = gender.lower().strip()
+        if age_group:
+            age_group = age_group.lower().strip()
+        if sort_by:
+            sort_by = sort_by.lower().strip()
+        if order:
+            order = order.lower().strip()
+
+
+        # Validate Age Group
+        allowed_groups = ["child", "teenager", "adult", "senior"]
+        if age_group and age_group not in allowed_groups:
+            raise ValueError()
+
+        # Validate Gender
+        if gender and gender.lower() not in ALLOWED_GENDERS:
+            raise ValueError()
+
+        # Validate Sorting & Ordering
+        if sort_by not in ALLOWED_SORT_BY:
+            raise ValueError()
+        if order not in ALLOWED_ORDER:
+            raise ValueError()
+ 
+
+        if min_age is not None:
+            min_age = int(min_age)
+        if max_age is not None:
+            max_age = int(max_age)
+        if min_gender_probability is not None:
+            min_gender_probability = float(min_gender_probability)
+        if min_country_probability is not None:
+            min_country_probability = float(min_country_probability)
+
+    except (ValueError, TypeError) as e:
+        print (e)
         return JSONResponse(
             status_code=400,
-            content=custom_content("error", message="Bad Request: Missing or empty id"),
+            content=custom_content("error", message="Invalid query parameters"),
         )
+    query = db.query(Profile)
+    # apply same filters as GET /api/profiles ...
+    if gender:
+        query = query.filter(func.lower(Profile.gender) == gender.lower())
+    if country_id:
+        query = query.filter(func.lower(Profile.country_id) == country_id.lower())
+    if age_group:
+        query = query.filter(Profile.age_group == age_group.lower())
 
-    profile_db = db.query(Profile).filter(Profile.id == id).first()
+    if min_age is not None:
+        query = query.filter(Profile.age >= min_age)
+    if max_age is not None:
+        query = query.filter(Profile.age <= max_age)
+    if min_gender_probability is not None:
+        query = query.filter(Profile.gender_probability >= min_gender_probability)
+    if min_country_probability is not None:
+        query = query.filter(Profile.country_probability >= min_country_probability)
 
-    if not profile_db:
-        return JSONResponse(
-            status_code=404,
-            content=custom_content(
-                "error",
-                message="Profile not found",
-            ),
-        )
+    # Sorting & Pagination
+    sort_column = getattr(Profile, sort_by or "created_at")
+    query = query.order_by(desc(sort_column) if order == "desc" else asc(sort_column))
 
-    profile_response = ProfileOut.model_validate(profile_db).model_dump(mode="json")
+    profiles = query.all()
 
-    return JSONResponse(
-        status_code=200, content=custom_content("success", data=profile_response)
+    buffer = io.StringIO()
+    writer = csv.DictWriter(buffer, fieldnames=[
+        "id","name","gender","gender_probability","age","age_group",
+        "country_id","country_name","country_probability","created_at"
+    ])
+    writer.writeheader()
+    for p in profiles:
+        writer.writerow(ProfileOut.model_validate(p).model_dump())
+
+    buffer.seek(0)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    return StreamingResponse(
+        buffer,
+        media_type="text/csv",
+        headers={"Content-Disposition": f'attachment; filename="profiles_{timestamp}.csv"'},
     )
 
 
-@router.get("/api/profiles")
+
+@router.get("/profiles")
+@limiter.limit("60/minute")
 def get_profiles(
+    request: Request,
     gender: Optional[str] = None,
     country_id: Optional[str] = None,
     age_group: Optional[str] = None,
@@ -299,6 +388,7 @@ def get_profiles(
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
 ):
 
     try:
@@ -371,24 +461,63 @@ def get_profiles(
     sort_column = getattr(Profile, sort_by or "created_at")
     query = query.order_by(desc(sort_column) if order == "desc" else asc(sort_column))
 
-    total_count = query.count()
+    total = query.count()
     offset = (page - 1) * limit
     profiles = query.offset(offset).limit(limit).all()
+    total_pages = math.ceil(total / limit)
 
-    data = [ProfilesOut.model_validate(p).model_dump(mode="json") for p in profiles]
+    base = f"/api/profiles?page={{p}}&limit={limit}"
+    
+    return JSONResponse(status_code=200, content={
+        "status": "success",
+        "page": page,
+        "limit": limit,
+        "total": total,
+        "total_pages": total_pages,
+        "links": {
+            "self": base.format(p=page),
+            "next": base.format(p=page+1) if page < total_pages else None,
+            "prev": base.format(p=page-1) if page > 1 else None,
+        },
+        "data": [ProfileOut.model_validate(p).model_dump(mode="json") for p in profiles],
+    })
+
+
+
+
+@router.get("/profiles/{id}")
+@limiter.limit("60/minute")
+def get_profile(
+    request: Request, id: str | None = None, db: Session = Depends(get_db),
+current_user: User = Depends(get_current_user)
+):
+    if not id:
+        return JSONResponse(
+            status_code=400,
+            content=custom_content("error", message="Bad Request: Missing or empty id"),
+        )
+
+    profile_db = db.query(Profile).filter(Profile.id == id).first()
+
+    if not profile_db:
+        return JSONResponse(
+            status_code=404,
+            content=custom_content(
+                "error",
+                message="Profile not found",
+            ),
+        )
+
+    profile_response = ProfileOut.model_validate(profile_db).model_dump(mode="json")
 
     return JSONResponse(
-        status_code=200,
-        content=custom_content(
-            "success", page=page, limit=limit, total=total_count, data=data
-        ),
+        status_code=200, content=custom_content("success", data=profile_response)
     )
 
 
-
-
-@router.delete("/api/profiles/{id}")
-def delete_profile(id: str, db: Session = Depends(get_db)):
+@router.delete("/profiles/{id}")
+@limiter.limit("60/minute")
+def delete_profile(request: Request, id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
     profile_db = db.query(Profile).filter(Profile.id == id).first()
 
     if not profile_db:

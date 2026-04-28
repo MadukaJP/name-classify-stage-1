@@ -1,49 +1,117 @@
-from fastapi import FastAPI, Request
-from fastapi.middleware.cors import CORSMiddleware
-from contextlib import asynccontextmanager
-from fastapi.responses import JSONResponse
 import httpx
-from database import engine
+from contextlib import asynccontextmanager
+from fastapi import FastAPI, Request
+from fastapi.exceptions import HTTPException
+from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+from fastapi.openapi.utils import get_openapi
+from slowapi import _rate_limit_exceeded_handler
+from slowapi.errors import RateLimitExceeded
+from dependencies.database import engine
+from dependencies.limiter import limiter
+from core.config import settings
+from middleware.api_version import APIVersionMiddleware
+from middleware.logging import LoggingMiddleware
 from models.base import Base
-from routes import profile
+from routes import auth, profile
 from utils.custom_content import custom_content
 
 
 
-# Lifespan
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    app.state.client = httpx.AsyncClient()
+    app.state.limiter = limiter
+    app.state.client  = httpx.AsyncClient()
     yield
     await app.state.client.aclose()
+
 
 
 app = FastAPI(lifespan=lifespan)
 
 
+def custom_openapi():
+    if app.openapi_schema:
+        return app.openapi_schema
 
-@app.exception_handler(Exception)
-async def global_exception_handler(request: Request, exc: Exception):
-    print(f"Exception String: {str(exc)}")
+    schema = get_openapi(
+        title="Insighta Labs+ API",
+        version="1.0.0",
+        description="Profile Intelligence Platform",
+        routes=app.routes,
+    )
+
+    for path, methods in schema.get("paths", {}).items():
+        if path.startswith("/api/"):
+            for method in methods.values():
+                method.setdefault("parameters", []).append({
+                    "name":        "X-API-Version",
+                    "in":          "header",
+                    "required":    True,
+                    "description": "API version — must be 1",
+                    "schema": {
+                        "type":    "string",
+                        "default": "1",
+                        "enum":    ["1"],
+                    },
+                })
+
+    app.openapi_schema = schema
+    return app.openapi_schema
+
+app.openapi = custom_openapi
+
+
+
+app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+
+@app.exception_handler(HTTPException)
+async def http_exception_handler(request: Request, exc: HTTPException):
     return JSONResponse(
-        status_code=500,
+        status_code=exc.status_code,
         content=custom_content(
             "error",
-            message="Upstream or server failure"
+            message=exc.detail if isinstance(exc.detail, str) else "Request failed",
         ),
     )
 
-app.include_router(profile.router)
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    print(f"Unhandled exception: {str(exc)}")
+    return JSONResponse(
+        status_code=500,
+        content=custom_content("error", message="Upstream or server failure"),
+    )
 
-# CORS
-origins = ['*']
 
+#Routes 
+@app.get("/")
+def index():
+    return {"status": "success", "message": "Welcome to Instalabs API"}
+
+app.include_router(auth.router, prefix="/auth")    
+app.include_router(profile.router, prefix="/api")   
+
+
+# 3. Runs last — version check (only on /api/* routes)
+app.add_middleware(APIVersionMiddleware)
+
+# 2. Runs second — request logging
+app.add_middleware(LoggingMiddleware)
+
+# 1. Runs first — CORS
+frontend_origin = settings.FRONTEND_URL.strip().rstrip("/")
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=origins,
-    allow_credentials=True,
+    allow_origins=[
+        frontend_origin,
+        "http://localhost:3000",
+        "http://127.0.0.1:3000",
+    ],
+    allow_credentials=True,            
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 Base.metadata.create_all(engine)

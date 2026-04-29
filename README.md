@@ -10,6 +10,7 @@
 - Base URL: [https://name-classify-api.fastapicloud.dev/](https://name-classify-api.fastapicloud.dev/)
 - Swagger Docs: [https://name-classify-api.fastapicloud.dev/docs](https://name-classify-api.fastapicloud.dev/docs)
 - ReDoc: [https://name-classify-api.fastapicloud.dev/redoc](https://name-classify-api.fastapicloud.dev/redoc)
+- Web Portal: [https://insighta-labs-portal.netlify.app](https://insighta-labs-portal.netlify.app)
 
 ## Features
 

@@ -5,12 +5,12 @@ from fastapi.exceptions import HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.openapi.utils import get_openapi
-from slowapi import _rate_limit_exceeded_handler
 from slowapi.errors import RateLimitExceeded
 from dependencies.database import engine
 from dependencies.limiter import limiter
 from core.config import settings
 from middleware.api_version import APIVersionMiddleware
+from middleware.csrf import CSRFMiddleware
 from middleware.logging import LoggingMiddleware
 from models.base import Base
 from routes import auth, profile
@@ -63,10 +63,16 @@ app.openapi = custom_openapi
 
 
 
-app.add_exception_handler(RateLimitExceeded, _rate_limit_exceeded_handler)
+@app.exception_handler(RateLimitExceeded)
+async def rate_limit_handler(request: Request, exc: RateLimitExceeded):
+    return JSONResponse(
+        status_code=429,
+        content=custom_content("error", message="Too many requests"),
+    )
 
 @app.exception_handler(HTTPException)
 async def http_exception_handler(request: Request, exc: HTTPException):
+    print(f"HTTPException: {str(exc)}")
     return JSONResponse(
         status_code=exc.status_code,
         content=custom_content(
@@ -94,6 +100,7 @@ app.include_router(profile.router, prefix="/api")
 
 
 # 3. Runs last — version check (only on /api/* routes)
+app.add_middleware(CSRFMiddleware)
 app.add_middleware(APIVersionMiddleware)
 
 # 2. Runs second — request logging

@@ -1,0 +1,66 @@
+name: Backend CI
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: insighta_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+      redis:
+        image: redis:7
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+
+    env:
+      ENV: development
+      SECRET_KEY: test-secret-key
+      ADMIN_GITHUB_USERNAMES: testadmin
+      GITHUB_CLIENT_ID: test-client-id
+      GITHUB_CLIENT_SECRET: test-client-secret
+      FRONTEND_URL: http://localhost:3000
+      LOCAL_DATABASE_URL: postgresql+psycopg2://postgres:postgres@localhost:5432/insighta_test
+      REDIS_URL: redis://localhost:6379/0
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Compile Python
+        run: python -m compileall app.py routes dependencies middleware models services utils pydantic_schemas
+
+      - name: Lint
+        run: ruff check .
+
+      - name: Run tests
+        run: pytest

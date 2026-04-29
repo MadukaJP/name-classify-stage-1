@@ -17,6 +17,7 @@ import re
 from sqlalchemy.sql import func
 from datetime import datetime, timezone
 from typing import Optional
+from urllib.parse import urlencode
 from sqlalchemy.orm import Session
 from services.external_apis import all_external_data
 from utils.country_utils import get_country_name_from_id
@@ -25,10 +26,34 @@ from utils.get_age_group import get_age_group
 
 router = APIRouter()
 NAME_REGEX = re.compile(r"^[A-Za-z\s\-']+$")
-ALLOWED_SORT_BY = {"age", "created_at", "gender_probability"}
+ALLOWED_SORT_BY = {"name", "age", "created_at", "gender_probability"}
 ALLOWED_ORDER = {"asc", "desc"}
 ALLOWED_GENDERS = {"male", "female"}
 ALLOWED_AGE_GROUPS = {"child", "teenager", "adult", "senior"}
+
+
+SORT_COLUMN_MAP = {
+    "name": Profile.name,
+    "age": Profile.age,
+    "created_at": Profile.created_at,
+    "gender_probability": Profile.gender_probability,
+}
+
+
+def build_pagination_links(request: Request, page: int, limit: int, total_pages: int) -> dict:
+    params = dict(request.query_params)
+
+    def link(target_page: int) -> str:
+        next_params = params.copy()
+        next_params["page"] = str(target_page)
+        next_params["limit"] = str(limit)
+        return f"{request.url.path}?{urlencode(next_params)}"
+
+    return {
+        "self": link(page),
+        "next": link(page + 1) if page < total_pages else None,
+        "prev": link(page - 1) if page > 1 else None,
+    }
 
 
 
@@ -231,14 +256,7 @@ def search_profiles(
         query = query.filter(or_(*name_filters))
 
 
-    # Sorting
-    sort_column_map = {
-        "age": Profile.age,
-        "created_at": Profile.created_at,
-        "gender_probability": Profile.gender_probability,
-    }
-
-    sort_column = sort_column_map.get(sort_by, Profile.created_at)
+    sort_column = SORT_COLUMN_MAP.get(sort_by, Profile.created_at)
 
     query = query.order_by(desc(sort_column) if order == "desc" else asc(sort_column))
 
@@ -249,19 +267,13 @@ def search_profiles(
     profiles = query.offset(offset).limit(limit).all()
     total_pages = math.ceil(total / limit)
 
-    base = f"/api/profiles?page={{p}}&limit={limit}"
-
     return JSONResponse(status_code=200, content={
         "status": "success",
         "page": page,
         "limit": limit,
         "total": total,
         "total_pages": total_pages,
-        "links": {
-            "self": base.format(p=page),
-            "next": base.format(p=page+1) if page < total_pages else None,
-            "prev": base.format(p=page-1) if page > 1 else None,
-        },
+        "links": build_pagination_links(request, page, limit, total_pages),
         "data": [ProfileOut.model_validate(p).model_dump(mode="json") for p in profiles],
     })
 
@@ -286,6 +298,10 @@ def export_profiles(
 ):
 
     try:
+        format = (format or "csv").lower().strip()
+        if format != "csv":
+            raise ValueError()
+
         if gender:
             gender = gender.lower().strip()
         if age_group:
@@ -346,7 +362,7 @@ def export_profiles(
         query = query.filter(Profile.country_probability >= min_country_probability)
 
     # Sorting & Pagination
-    sort_column = getattr(Profile, sort_by or "created_at")
+    sort_column = SORT_COLUMN_MAP.get(sort_by or "created_at", Profile.created_at)
     query = query.order_by(desc(sort_column) if order == "desc" else asc(sort_column))
 
     profiles = query.all()
@@ -358,7 +374,7 @@ def export_profiles(
     ])
     writer.writeheader()
     for p in profiles:
-        writer.writerow(ProfileOut.model_validate(p).model_dump())
+        writer.writerow(ProfileOut.model_validate(p).model_dump(mode="json"))
 
     buffer.seek(0)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -458,7 +474,7 @@ def get_profiles(
         query = query.filter(Profile.country_probability >= min_country_probability)
 
     # Sorting & Pagination
-    sort_column = getattr(Profile, sort_by or "created_at")
+    sort_column = SORT_COLUMN_MAP.get(sort_by or "created_at", Profile.created_at)
     query = query.order_by(desc(sort_column) if order == "desc" else asc(sort_column))
 
     total = query.count()
@@ -466,19 +482,13 @@ def get_profiles(
     profiles = query.offset(offset).limit(limit).all()
     total_pages = math.ceil(total / limit)
 
-    base = f"/api/profiles?page={{p}}&limit={limit}"
-    
     return JSONResponse(status_code=200, content={
         "status": "success",
         "page": page,
         "limit": limit,
         "total": total,
         "total_pages": total_pages,
-        "links": {
-            "self": base.format(p=page),
-            "next": base.format(p=page+1) if page < total_pages else None,
-            "prev": base.format(p=page-1) if page > 1 else None,
-        },
+        "links": build_pagination_links(request, page, limit, total_pages),
         "data": [ProfileOut.model_validate(p).model_dump(mode="json") for p in profiles],
     })
 
@@ -517,7 +527,7 @@ current_user: User = Depends(get_current_user)
 
 @router.delete("/profiles/{id}")
 @limiter.limit("60/minute")
-def delete_profile(request: Request, id: str, db: Session = Depends(get_db), current_user: User = Depends(get_current_user)):
+def delete_profile(request: Request, id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
     profile_db = db.query(Profile).filter(Profile.id == id).first()
 
     if not profile_db:

@@ -1,18 +1,20 @@
 from pydantic_settings import BaseSettings
+from pydantic import ConfigDict
 
 class Settings(BaseSettings):
+    model_config = ConfigDict(env_file=".env")
+
     ENV : str
     SECRET_KEY : str
     ADMIN_GITHUB_USERNAMES : str | None = None
     GITHUB_CLIENT_ID : str
+    GITHUB_CLIENT_ID_CLI : str
     GITHUB_CLIENT_SECRET : str
+    GITHUB_CLIENT_SECRET_CLI : str
     FRONTEND_URL: str
     LOCAL_DATABASE_URL: str | None = None
     PROD_DATABASE_URL:  str | None = None
     REDIS_URL: str
-
-    class Config:
-        env_file = ".env"
 
 settings = Settings()
 

@@ -3,7 +3,7 @@
 [![Live API](https://img.shields.io/badge/Live%20API-Online-blue?logo=fastapi)](https://name-classify-api.fastapicloud.dev/)
 [![Docs](https://img.shields.io/badge/Swagger-Docs-green)](https://name-classify-api.fastapicloud.dev/docs)
 
-`Name Classify API` is a FastAPI service that accepts a person's name, calls three public prediction APIs, applies classification logic, stores the result in PostgreSQL, and exposes endpoints to retrieve, filter, and delete saved profiles.
+`Name Classify API` is now the backend for **Insighta Labs+**, a secure profile intelligence platform. It accepts a person's name, calls public prediction APIs, stores normalized profiles in PostgreSQL, and exposes authenticated APIs shared by the CLI and web portal.
 
 ## Live Links
 
@@ -13,6 +13,13 @@
 
 ## Features
 
+- GitHub OAuth login with PKCE for browser sessions
+- CLI OAuth token exchange endpoint for local callback flows
+- JWT access tokens with 3-minute expiry
+- Rotating refresh tokens with 5-minute expiry and server-side revocation
+- HTTP-only web cookies plus CSRF protection for cookie-authenticated mutations
+- Role-based access control with `admin` and `analyst` roles
+- Per-user rate limiting for authenticated API traffic
 - Creates a classified profile from a submitted name
 - Calls `Genderize`, `Agify`, and `Nationalize` concurrently
 - Stores data persistently in PostgreSQL
@@ -23,6 +30,114 @@
 - Supports rule-based natural language search
 - Uses UUID v7 IDs and UTC ISO 8601 timestamps
 - Returns a consistent JSON response structure
+
+## System Architecture
+
+Insighta Labs+ is split into three repositories:
+
+- **Backend**: FastAPI, PostgreSQL, Redis, SQLAlchemy, GitHub OAuth, JWT sessions, RBAC, profile APIs.
+- **CLI**: Typer/Rich command line app installed as `insighta`; stores local tokens in `~/.insighta/credentials.json`.
+- **Web portal**: TanStack Start/React portal that uses the same backend APIs through HTTP-only cookies.
+
+The backend is the single source of truth. The CLI sends bearer tokens, while the web portal sends HTTP-only cookies. Both interfaces use the same `/api/*` endpoints, the same role checks, and the same profile data.
+
+## Authentication Flow
+
+### Web
+
+1. User clicks **Continue with GitHub**.
+2. `GET /auth/github` creates a `state`, `code_verifier`, and PKCE `code_challenge`.
+3. GitHub redirects back to `GET /auth/github/callback`.
+4. The backend validates the one-time state from Redis.
+5. The backend exchanges `code + code_verifier` with GitHub.
+6. The backend creates or updates the user and sets:
+   - `access_token` as an HTTP-only cookie, 3-minute expiry
+   - `refresh_token` as an HTTP-only cookie, 5-minute expiry
+   - `csrf_token` as a readable double-submit CSRF cookie
+
+### CLI
+
+1. CLI generates its own `state`, `code_verifier`, and PKCE `code_challenge`.
+2. CLI starts a temporary local callback server.
+3. GitHub redirects to the local callback URL with `code` and `state`.
+4. CLI validates the returned `state`.
+5. CLI sends `code`, `code_verifier`, and `redirect_uri` to `POST /auth/github/cli/callback`.
+6. The backend exchanges the code with GitHub and returns an access/refresh token pair.
+
+## Token Handling
+
+- Access tokens expire after 3 minutes.
+- Refresh tokens expire after 5 minutes.
+- Refresh tokens are stored server-side as SHA-256 hashes.
+- `POST /auth/refresh` revokes the old refresh token immediately and issues a new pair.
+- `POST /auth/logout` revokes the active refresh token.
+- Web refresh/logout requests use cookies and must include `X-CSRF-Token`.
+- CLI refresh/logout requests send the refresh token in the request body and do not require CSRF.
+
+## Role Enforcement
+
+Users are stored in the `users` table with `role`, `is_active`, and GitHub identity fields.
+
+- `analyst`: read-only access to list, detail, search, and export.
+- `admin`: full access, including profile creation and deletion.
+- Disabled users (`is_active=false`) receive `403 Forbidden` on authenticated requests.
+
+Authorization is centralized in FastAPI dependencies:
+
+- `get_current_user` validates bearer tokens or web cookies.
+- `require_admin` builds on `get_current_user` for write/admin endpoints.
+
+## Required API Headers
+
+All `/api/*` requests must include:
+
+```http
+X-API-Version: 1
+```
+
+Missing version headers return:
+
+```json
+{
+  "status": "error",
+  "message": "API version header required"
+}
+```
+
+Cookie-authenticated unsafe requests also require:
+
+```http
+X-CSRF-Token: <csrf_token cookie value>
+```
+
+## Auth Endpoints
+
+| Method | Path | Purpose |
+|---|---|---|
+| `GET` | `/auth/github` | Start browser GitHub OAuth with PKCE |
+| `GET` | `/auth/github/callback` | Handle browser OAuth callback and set cookies |
+| `POST` | `/auth/github/cli/callback` | Exchange CLI `code + code_verifier` for tokens |
+| `POST` | `/auth/refresh` | Rotate refresh token and issue a new token pair |
+| `POST` | `/auth/logout` | Revoke refresh token and clear web cookies |
+| `GET` | `/auth/me` | Return the authenticated user |
+
+## CLI Usage
+
+After installing the CLI globally:
+
+```bash
+insighta login
+insighta whoami
+insighta profiles list --gender male --country NG --age-group adult
+insighta profiles list --min-age 25 --max-age 40 --sort-by age --order desc
+insighta profiles get <id>
+insighta profiles search "young males from nigeria"
+insighta profiles create --name "Harriet Tubman"
+insighta profiles export --format csv --country NG
+insighta logout
+```
+
+The CLI stores credentials at `~/.insighta/credentials.json`, sends bearer tokens to the backend, refreshes once on `401`, and asks the user to log in again when the refresh token is expired or revoked.
 
 ## Query Engine
 

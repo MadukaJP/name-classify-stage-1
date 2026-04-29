@@ -214,25 +214,6 @@ def register_state(request: Request, payload: RegisterStatePayload):
     )
 
 
-def _get_or_create_test_user(db: Session, role: str = "admin") -> User:
-    test_username = f"test_{role}_user"
-    user = db.query(User).filter(User.username == test_username).first()
-    if not user:
-        user = User(
-            github_id=f"test_{role}_github_id",
-            username=test_username,
-            email=f"{role}@test.local",
-            avatar_url="",
-            role=role,
-            is_active=True,
-            last_login_at=datetime.now(timezone.utc),
-        )
-        db.add(user)
-        db.commit()
-        db.refresh(user)
-    return user
-
-
 @router.get("/github/callback")
 @limiter.limit("10/minute")
 async def github_callback(
@@ -247,24 +228,6 @@ async def github_callback(
 
     if state_data.get("mode") != "web":
         raise HTTPException(status_code=400, detail="Invalid OAuth flow")
-
-    if code == "test_code":
-        user = _get_or_create_test_user(db, role="admin")
-        access_token, refresh_token = issue_token_pair(db, user)
-        return JSONResponse(
-            content={
-                "status": "success",
-                "access_token": access_token,
-                "refresh_token": refresh_token,
-                "user": {
-                    "id": str(user.id),
-                    "username": user.username,
-                    "email": user.email,
-                    "avatar_url": user.avatar_url,
-                    "role": user.role,
-                },
-            }
-        )
 
     user = await authenticate_with_github(
         db=db,

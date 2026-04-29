@@ -13,7 +13,7 @@ from middleware.api_version import APIVersionMiddleware
 from middleware.csrf import CSRFMiddleware
 from middleware.logging import LoggingMiddleware
 from models.base import Base
-from routes import auth, profile, test
+from routes import auth, profile
 from utils.custom_content import custom_content
 
 
@@ -100,7 +100,6 @@ def index():
 
 app.include_router(auth.router, prefix="/auth")
 app.include_router(profile.router, prefix="/api")
-app.include_router(test.router, prefix="/test")
 
 
 # 3. Runs last — version check (only on /api/* routes)

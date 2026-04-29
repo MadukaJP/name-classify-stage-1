@@ -32,6 +32,23 @@ ALLOWED_GENDERS = {"male", "female"}
 ALLOWED_AGE_GROUPS = {"child", "teenager", "adult", "senior"}
 
 
+@router.get("/users/me")
+@limiter.limit("10/minute")
+def users_me(request: Request, current_user: User = Depends(get_current_user)):
+    return JSONResponse(
+        content={
+            "status": "success",
+            "data": {
+                "id": str(current_user.id),
+                "username": current_user.username,
+                "email": current_user.email,
+                "avatar_url": current_user.avatar_url,
+                "role": current_user.role,
+            },
+        }
+    )
+
+
 SORT_COLUMN_MAP = {
     "name": Profile.name,
     "age": Profile.age,
@@ -56,36 +73,30 @@ def build_pagination_links(request: Request, page: int, limit: int, total_pages:
     }
 
 
-
 @router.post("/profiles")
 @limiter.limit("60/minute")
 async def create_profile(
-    request: Request, profile: ProfileCreate, db: Session = Depends(get_db),
-    current_user: User = Depends(require_admin), 
+    request: Request,
+    profile: ProfileCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
 ):
-
     name = profile.name.strip()
 
     if name.strip() == "":
         return JSONResponse(
             status_code=400,
-            content=custom_content(
-                "error", message="Bad Request: Missing or empty name"
-            ),
+            content=custom_content("error", message="Bad Request: Missing or empty name"),
         )
 
     # regex string validation
     if not NAME_REGEX.fullmatch(name):
         return JSONResponse(
             status_code=422,
-            content=custom_content(
-                "error", message="Unprocessable Entity: Invalid type"
-            ),
+            content=custom_content("error", message="Unprocessable Entity: Invalid type"),
         )
 
-    profile_db = (
-        db.query(Profile).filter(func.lower(Profile.name) == name.lower()).first()
-    )
+    profile_db = db.query(Profile).filter(func.lower(Profile.name) == name.lower()).first()
 
     if profile_db:
         profile_response = ProfileOut.model_validate(profile_db).model_dump(mode="json")
@@ -123,9 +134,7 @@ async def create_profile(
     if not gender:
         return JSONResponse(
             status_code=502,
-            content=custom_content(
-                "error", message="Genderize returned an invalid response"
-            ),
+            content=custom_content("error", message="Genderize returned an invalid response"),
         )
 
     # extract age details
@@ -133,9 +142,7 @@ async def create_profile(
     if age is None:
         return JSONResponse(
             status_code=502,
-            content=custom_content(
-                "error", message="Agify returned an invalid response"
-            ),
+            content=custom_content("error", message="Agify returned an invalid response"),
         )
 
     age_group = get_age_group(age)
@@ -146,9 +153,7 @@ async def create_profile(
     if not countries:
         return JSONResponse(
             status_code=502,
-            content=custom_content(
-                "error", message="Nationalize returned an invalid response"
-            ),
+            content=custom_content("error", message="Nationalize returned an invalid response"),
         )
 
     most_likely_country = max(countries, key=lambda x: x["probability"])
@@ -176,9 +181,8 @@ async def create_profile(
 
     profile_response = ProfileOut.model_validate(profile_db).model_dump(mode="json")
 
-    return JSONResponse(
-        status_code=201, content=custom_content("success", data=profile_response)
-    )
+    return JSONResponse(status_code=201, content=custom_content("success", data=profile_response))
+
 
 @router.get("/profiles/search")
 @limiter.limit("60/minute")
@@ -221,7 +225,6 @@ def search_profiles(
     countries = filters.get("countries", [])
     names = filters.get("names", [])
 
-
     has_any_filter = any(
         value is not None and value != []
         for value in [min_age, max_age, age_groups, genders, countries, names]
@@ -234,7 +237,6 @@ def search_profiles(
         )
 
     query = db.query(Profile)
-
 
     if genders:
         query = query.filter(func.lower(Profile.gender).in_([g.lower() for g in genders]))
@@ -255,11 +257,9 @@ def search_profiles(
         name_filters = [Profile.name.ilike(f"%{name}%") for name in names]
         query = query.filter(or_(*name_filters))
 
-
     sort_column = SORT_COLUMN_MAP.get(sort_by, Profile.created_at)
 
     query = query.order_by(desc(sort_column) if order == "desc" else asc(sort_column))
-
 
     # Pagination
     total = query.count()
@@ -267,15 +267,18 @@ def search_profiles(
     profiles = query.offset(offset).limit(limit).all()
     total_pages = math.ceil(total / limit)
 
-    return JSONResponse(status_code=200, content={
-        "status": "success",
-        "page": page,
-        "limit": limit,
-        "total": total,
-        "total_pages": total_pages,
-        "links": build_pagination_links(request, page, limit, total_pages),
-        "data": [ProfileOut.model_validate(p).model_dump(mode="json") for p in profiles],
-    })
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "success",
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "total_pages": total_pages,
+            "links": build_pagination_links(request, page, limit, total_pages),
+            "data": [ProfileOut.model_validate(p).model_dump(mode="json") for p in profiles],
+        },
+    )
 
 
 @router.get("/profiles/export")
@@ -296,7 +299,6 @@ def export_profiles(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ):
-
     try:
         format = (format or "csv").lower().strip()
         if format != "csv":
@@ -310,7 +312,6 @@ def export_profiles(
             sort_by = sort_by.lower().strip()
         if order:
             order = order.lower().strip()
-
 
         # Validate Age Group
         allowed_groups = ["child", "teenager", "adult", "senior"]
@@ -326,7 +327,6 @@ def export_profiles(
             raise ValueError()
         if order not in ALLOWED_ORDER:
             raise ValueError()
- 
 
         if min_age is not None:
             min_age = int(min_age)
@@ -338,7 +338,7 @@ def export_profiles(
             min_country_probability = float(min_country_probability)
 
     except (ValueError, TypeError) as e:
-        print (e)
+        print(e)
         return JSONResponse(
             status_code=400,
             content=custom_content("error", message="Invalid query parameters"),
@@ -368,10 +368,21 @@ def export_profiles(
     profiles = query.all()
 
     buffer = io.StringIO()
-    writer = csv.DictWriter(buffer, fieldnames=[
-        "id","name","gender","gender_probability","age","age_group",
-        "country_id","country_name","country_probability","created_at"
-    ])
+    writer = csv.DictWriter(
+        buffer,
+        fieldnames=[
+            "id",
+            "name",
+            "gender",
+            "gender_probability",
+            "age",
+            "age_group",
+            "country_id",
+            "country_name",
+            "country_probability",
+            "created_at",
+        ],
+    )
     writer.writeheader()
     for p in profiles:
         writer.writerow(ProfileOut.model_validate(p).model_dump(mode="json"))
@@ -383,7 +394,6 @@ def export_profiles(
         media_type="text/csv",
         headers={"Content-Disposition": f'attachment; filename="profiles_{timestamp}.csv"'},
     )
-
 
 
 @router.get("/profiles")
@@ -404,9 +414,8 @@ def get_profiles(
     page: int = Query(1, ge=1),
     limit: int = Query(10, ge=1, le=50),
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    current_user: User = Depends(get_current_user),
 ):
-
     try:
         if gender:
             gender = gender.lower().strip()
@@ -437,7 +446,6 @@ def get_profiles(
             raise ValueError()
         if order not in ALLOWED_ORDER:
             raise ValueError()
- 
 
         if min_age is not None:
             min_age = int(min_age)
@@ -449,7 +457,7 @@ def get_profiles(
             min_country_probability = float(min_country_probability)
 
     except (ValueError, TypeError) as e:
-        print (e)
+        print(e)
         return JSONResponse(
             status_code=400,
             content=custom_content("error", message="Invalid query parameters"),
@@ -482,24 +490,27 @@ def get_profiles(
     profiles = query.offset(offset).limit(limit).all()
     total_pages = math.ceil(total / limit)
 
-    return JSONResponse(status_code=200, content={
-        "status": "success",
-        "page": page,
-        "limit": limit,
-        "total": total,
-        "total_pages": total_pages,
-        "links": build_pagination_links(request, page, limit, total_pages),
-        "data": [ProfileOut.model_validate(p).model_dump(mode="json") for p in profiles],
-    })
-
-
+    return JSONResponse(
+        status_code=200,
+        content={
+            "status": "success",
+            "page": page,
+            "limit": limit,
+            "total": total,
+            "total_pages": total_pages,
+            "links": build_pagination_links(request, page, limit, total_pages),
+            "data": [ProfileOut.model_validate(p).model_dump(mode="json") for p in profiles],
+        },
+    )
 
 
 @router.get("/profiles/{id}")
 @limiter.limit("60/minute")
 def get_profile(
-    request: Request, id: str | None = None, db: Session = Depends(get_db),
-current_user: User = Depends(get_current_user)
+    request: Request,
+    id: str | None = None,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
 ):
     if not id:
         return JSONResponse(
@@ -520,14 +531,17 @@ current_user: User = Depends(get_current_user)
 
     profile_response = ProfileOut.model_validate(profile_db).model_dump(mode="json")
 
-    return JSONResponse(
-        status_code=200, content=custom_content("success", data=profile_response)
-    )
+    return JSONResponse(status_code=200, content=custom_content("success", data=profile_response))
 
 
 @router.delete("/profiles/{id}")
 @limiter.limit("60/minute")
-def delete_profile(request: Request, id: str, db: Session = Depends(get_db), current_user: User = Depends(require_admin)):
+def delete_profile(
+    request: Request,
+    id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin),
+):
     profile_db = db.query(Profile).filter(Profile.id == id).first()
 
     if not profile_db:
